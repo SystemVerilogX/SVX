@@ -1,0 +1,16 @@
+#!/usr/intel/pkgs/perl/5.14.1-threads/bin/perl
+# -*- mode: perl; indent-tabs-mode: nil; perl-indent-level: 2; cperl-indent-level: 2; -*-
+
+## Pragmas
+use strict;
+use warnings;
+
+## Include Paths
+use Cwd;
+use File::Basename;
+use FindBin;
+
+$ENV{PATH} = "/usr/intel/pkgs/java/1.7.0.02/bin:/usr/intel/pkgs/cmake/2.8.7/bin:'$ENV{PATH}";
+my $status = system("$FindBin::Bin/bin/make_all");
+
+exit($status != 0);
