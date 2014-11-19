@@ -1,0 +1,223 @@
+#!/usr/bin/perl
+
+
+# Copyright (c) 2014, Intel Corporation
+# 
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions are met:
+# 
+#     * Redistributions of source code must retain the above copyright notice,
+#       this list of conditions and the following disclaimer.
+#     * Redistributions in binary form must reproduce the above copyright
+#       notice, this list of conditions and the following disclaimer in the
+#       documentation and/or other materials provided with the distribution.
+#     * Neither the name of Intel Corporation nor the names of its contributors
+#       may be used to endorse or promote products derived from this software
+#       without specific prior written permission.
+# 
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+# AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+# IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+# DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+# FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+# DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+# SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+# CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+# OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+# OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+
+# This script analyzes SV or SVX source code, and presents an approximate breakdown of the code into
+# various classifications
+# It is specific to SDG coding conventions.
+
+# Args:
+#  -keep: Count preserved lines only (tagged w/ \SV  or \KEEP).
+#  -mod:  Count modified  lines only (tagged w/ \SVX or \MOD ).
+#  filenames
+#  -i: Ignore // ----------------- U63xH  comments.
+
+use strict;
+
+my $tot_lines = 0;
+my $code_lines = 0;
+my $tot_chars = 0;
+my $ws_chars = 0;
+my $comm_chars = 0;
+my $multiline_comm_chars = 0;
+my $code_chars = 0;
+my $phys_chars = 0;
+my $always_chars = 0;
+my $beh_chars = 0;
+my $svx_beh_chars = 0;
+my $decl_chars = 0;
+my $svx_chars = 0;
+my $sv_chars = 0;
+my $svx_mode = 0;
+my $keep = 0;
+my $beh_code = "";
+my $comment = '';
+
+my $file;
+my $files;
+
+my $count_keep = 1;
+my $count_mod  = 1;
+
+my $xl = 0;
+my $i_flag = 0;
+
+while ($file = shift()) {
+   while ($file =~ /^-/) {
+      # Process command-line args that aren't files.
+      if ($file eq '-keep') {$count_mod = 0;}
+      if ($file eq '-mod')  {$count_keep = 0;}
+      if ($file eq '-xl') {$xl = 1;}
+      if ($file eq '-i') {$i_flag = 1;}
+      $file = shift();
+   }
+
+   $svx_mode = 0;
+   $keep = 0;
+
+   $files = $files . $file;
+   open(FILE, "expand $file |");  # convert tabs to the appropriate number of spaces
+   while (<FILE>) {
+
+      if (/^\s*\\SVX/) {  # look for \SVX and \SV markers which distinguish types of code
+         $svx_mode = 1;
+         $keep = 0;
+      } elsif (/^\s*\\SV/) {
+         $svx_mode = 0;
+         $keep = 1;
+      } elsif (/\\KEEP$/) {
+         $svx_mode = 0;
+         $keep = 1;
+      } elsif (/\\MOD$/) {
+         $svx_mode = 0;
+         $keep = 0;
+      }
+      my $ignore_line = !((!$keep && $count_mod ) ||
+                          ( $keep && $count_keep)   );
+      # Specifically for hahitmectls.vx, hahitmectls_svx.vs, and hahitmectls_plgen.vs, we kept comments to help with tkdiff that would otherwise
+      # have been removed, so pretend they don't exist.
+      if ($i_flag && $_ =~ m|^// -------+ U6\w+\s*$|) {
+         $ignore_line = 1;
+      }
+      if ($ignore_line) {
+        # print "Ignoring: $_";
+      } else {
+
+         chop;  # remove newline
+         $_ = $_ . ' ';  # Count the new-line as 1 whitespace character.
+         # $_ = " " x 40 if ($_ =~ /^\s*$/);  # count 40 whitespace characters for every blank line
+
+         $tot_lines++;  # update total counts
+         $tot_chars += length($_);
+
+         if ($comment) {
+            # Unterminated (and uncounted) comment from previous line.
+            $comment .= $_;
+            # Count comment chars until comment is terminated.
+            if ($comment =~ s|\*/(.*)$|\*/|) {    # Strip after comment end from $comment.
+               $_ = $1;                           # And append it back to $_.
+               $comm_chars += length($comment);
+               $multiline_comm_chars += length($comment);
+               $comment = '';
+            } else {
+               # To speed things up, strip and count the comment, but leave one character as an
+               # indication that we are inside a comment.
+               $comm_chars += length($comment) - 1;
+               $multiline_comm_chars += length($comment) - 1;
+               $comment = ' ';
+            }
+         }
+         if ($comment) {
+            # Whole line was a comment.  $_ chars will be counted as SV or SVX.
+         } else {
+            # Any comment termination on this line has been stripped.
+            # Look for comment beginning.
+            while (s|(/([\*/]).*)$||) {   # Strip from comment begin.
+               if ($2 eq '/') {
+                  # // comment
+                  $comm_chars += length($1);
+               } else {
+                  # /* comment
+                  $comment = $1;            # And put it in $comment.
+                  if ($comment =~ s|\*/(.*)$|\*/|) {   # Strip after comment end from $comment.
+                     $_ .= $1;                         # And append it back to $_.
+                     $comm_chars += length($comment);
+                     $comment = '';
+                  }
+               }
+            }
+
+            my $overhead_chars = 0;
+            $overhead_chars = length($1) if s/(\balways\w*|\bbegin\b|\bend\b|\bassign\b)//;
+                 # remove and count always_*, begin, and end keywords.  Even though we're removing
+                 # these here so they can be parsed with whitespaces in place, they are considered "code".
+
+            $ws_chars += s/\s//g;  # remove and count remaining white space
+
+            $code_lines++ if (($_ ne "") || ($overhead_chars > 0));  # count remaining characters as code
+            $code_chars += length($_) + $overhead_chars;
+
+            $always_chars += $overhead_chars;
+
+            # further classify the active code:
+            if ($svx_mode && ((/^\\\w/) || (/^\|\w/) || (/^>\w/))) {  # count special SVX behavioral code
+               $svx_beh_chars += length($_);
+            } elsif (/MSFF|LATCH|_RCB_|_LCB_|CLKBF|\@\d/) {  # count flops, latches, and SVX @<pipestage> lines as physical/staging
+	             $phys_chars += length($_);
+            } elsif (/^node|^t_/) {  # count node declarations
+               $decl_chars += length($_);
+            } else {  # the rest of the code is behavioral
+	             $beh_chars += length($_);
+	             $beh_code .= "$_\n";
+            }
+         }
+         if ($svx_mode) {
+            $svx_chars += length($_);
+         } else {
+            $sv_chars += length($_);
+         }
+      }
+   }
+}
+
+if ($xl) {
+   my $comm_ws_chars = $comm_chars + $ws_chars;
+   my $struct_chars = $always_chars + $svx_beh_chars;
+   print "$beh_chars\t$phys_chars\t$struct_chars\t$decl_chars\t$comm_ws_chars\t$tot_chars\n";
+
+   # print "DEBUG: code $code_lines, tot $tot_chars, ws $ws_chars, comm $comm_chars, multiline_comm $multiline_comm_chars, code $code_chars, phys $phys_chars, always $always_chars, beh $beh_chars, svx_beh $svx_beh_chars, decl $decl_chars, svx $svx_chars, sv $sv_chars\n";
+
+} else {
+   print "Summary:\n";
+   print "\t$tot_lines total lines\n";
+   print "\t\t$code_lines lines of non-comment code\n";
+   printf "\t%4.1f%% (%5.1fk characters) active code\n", $code_chars / $tot_chars * 100.0, ($code_chars / 1000.0);
+   printf "\t\t%4.1f%% (%5.1fk characters) behavioral/assignment code\n", $beh_chars / $tot_chars * 100.0, ($beh_chars / 1000.0);
+   printf "\t\t%4.1f%% (%5.1fk characters) phys/staging code\n", $phys_chars / $tot_chars * 100.0, ($phys_chars / 1000.0);
+   printf "\t\t%4.1f%% (%5.1fk characters) always/begin/end keywords\n", $always_chars / $tot_chars * 100.0, ($always_chars / 1000.0);
+   printf "\t\t%4.1f%% (%5.1fk characters) node declarations\n", $decl_chars / $tot_chars * 100.0, ($decl_chars / 1000.0);
+   if ($svx_chars > 0) {
+      printf "\t\t%4.1f%% (%5.1fk characters) SVX pipe/hier/keywords\n", $svx_beh_chars / $tot_chars * 100.0, ($svx_beh_chars / 1000.0);
+      print "\n";
+      printf "\t\t%4.1f%% (%5.1fk characters) SVX code\n", $svx_chars / $tot_chars * 100.0, ($svx_chars / 1000.0);
+      printf "\t\t%4.1f%% (%5.1fk characters) SV code\n", $sv_chars / $tot_chars * 100.0, ($sv_chars / 1000.0);
+   }
+   printf "\t%4.1f%% (%5.1fk characters) comments (%5.1fk multi-line comment chars)\n",
+          $comm_chars / $tot_chars * 100.0, ($comm_chars / 1000.0), ($multiline_comm_chars / 1000.0);
+   printf "\t%4.1f%% white space\n", $ws_chars / $tot_chars * 100.0;
+
+   if ($svx_chars <= 0) {
+      my $code_lines_k = int($code_lines / 1000);
+      printf "\n\tCode reduction from SVX for $files: ~%4.1f%% over $code_lines_k K lines\n", ($code_chars - $beh_chars) / $code_chars * 100.0;
+   }
+}
+
+open(BEH_CODE, ">/tmp/beh_code.vs");
+print BEH_CODE $beh_code;
+close(BEH_CODE);

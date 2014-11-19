@@ -1,0 +1,1 @@
+m4_changecom(`//')m4_changequote(`["', `"]')m4_changequote(["['"], ["']"])m4_include(['generic.vxm4'])m4_include(['svx_m4_lib.vxm4'])
